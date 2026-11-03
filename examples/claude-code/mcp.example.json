@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "approval-desk": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer ${APPROVAL_DESK_TOKEN}"
+      }
+    }
+  }
+}
