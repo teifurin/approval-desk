@@ -94,10 +94,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 function DbSyncSetup() {
   const qc = useQueryClient();
+  const { pathname } = useLocation();
   useNavigationState();
   useDbSync({
     queryClient: qc,
     ignoreSource: TAB_ID,
+    ...(pathname.startsWith("/inbox")
+      ? {
+          realtime: {
+            reason: "external agents file requests while the inbox is open",
+          },
+        }
+      : {}),
   });
   return null;
 }

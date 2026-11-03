@@ -1,4 +1,5 @@
 import { appPath } from "@agent-native/core/client/api-path";
+import { useActionQuery } from "@agent-native/core/client/hooks";
 import { useT } from "@agent-native/core/client/i18n";
 import {
   navigateWithAgentChatViewTransition,
@@ -15,11 +16,13 @@ import { openCommandMenu } from "@agent-native/toolkit/app/shared";
 import { AgentNativeIcon } from "@agent-native/toolkit/app/shared/AgentNativeIcon";
 import {
   IconEdit,
-  IconHome,
+  IconHistory,
+  IconInbox,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconLoader2,
   IconSearch,
+  IconShieldCheck,
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -31,7 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { APP_TITLE } from "@/lib/app-config";
-import { chatThreadPath, HOME_PATH, threadIdFromPath } from "@/lib/chat-paths";
+import { chatThreadPath, threadIdFromPath } from "@/lib/chat-paths";
 import { cn } from "@/lib/utils";
 
 const CHAT_STORAGE_KEY = "chat";
@@ -117,15 +120,27 @@ function persistActiveThreadId(threadId: string) {
   } catch {}
 }
 
-function HomeNavLink({ collapsed }: { collapsed: boolean }) {
-  const t = useT();
+function DomainNavLink({
+  to,
+  label,
+  icon: Icon,
+  badge,
+  collapsed,
+}: {
+  to: string;
+  label: string;
+  icon: typeof IconInbox;
+  badge?: number | undefined;
+  collapsed: boolean;
+}) {
   const location = useLocation();
-  const active = location.pathname === HOME_PATH;
+  const active =
+    location.pathname === to || location.pathname.startsWith(`${to}/`);
   const link = (
     <Link
-      to={HOME_PATH}
+      to={to}
       aria-current={active ? "page" : undefined}
-      aria-label={collapsed ? t("navigation.home") : undefined}
+      aria-label={collapsed ? label : undefined}
       className={cn(
         "flex items-center text-sidebar-accent-foreground transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         active && "bg-sidebar-accent",
@@ -134,10 +149,15 @@ function HomeNavLink({ collapsed }: { collapsed: boolean }) {
           : "h-8 w-full gap-3 rounded-lg px-3 text-sm font-medium",
       )}
     >
-      <IconHome className="size-4 shrink-0" strokeWidth={1.8} />
-      <span className={collapsed ? "sr-only" : "truncate"}>
-        {t("navigation.home")}
+      <Icon className="size-4 shrink-0" strokeWidth={1.8} />
+      <span className={collapsed ? "sr-only" : "min-w-0 flex-1 truncate"}>
+        {label}
       </span>
+      {badge && !collapsed ? (
+        <span className="text-xs tabular-nums text-sidebar-foreground">
+          {badge}
+        </span>
+      ) : null}
     </Link>
   );
 
@@ -145,12 +165,40 @@ function HomeNavLink({ collapsed }: { collapsed: boolean }) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>{link}</TooltipTrigger>
-        <TooltipContent side="right">{t("navigation.home")}</TooltipContent>
+        <TooltipContent side="right">{label}</TooltipContent>
       </Tooltip>
     );
   }
 
   return <div className="px-2">{link}</div>;
+}
+
+function DomainNav({ collapsed }: { collapsed: boolean }) {
+  const t = useT();
+  const { data } = useActionQuery("list-requests", { status: "pending" });
+  return (
+    <div className={cn("flex flex-col gap-0.5", !collapsed && "pb-3")}>
+      <DomainNavLink
+        to="/inbox"
+        label={t("inbox.nav")}
+        icon={IconInbox}
+        badge={data?.pendingCount}
+        collapsed={collapsed}
+      />
+      <DomainNavLink
+        to="/policies"
+        label={t("policies.nav")}
+        icon={IconShieldCheck}
+        collapsed={collapsed}
+      />
+      <DomainNavLink
+        to="/audit"
+        label={t("audit.nav")}
+        icon={IconHistory}
+        collapsed={collapsed}
+      />
+    </div>
+  );
 }
 
 function ChatThreadsSection({ collapsed }: { collapsed: boolean }) {
@@ -407,7 +455,7 @@ export function Sidebar({
           collapsed ? "items-center gap-1 px-1 py-2" : "pt-1",
         )}
       >
-        <HomeNavLink collapsed={collapsed} />
+        <DomainNav collapsed={collapsed} />
         <ChatThreadsSection collapsed={collapsed} />
       </nav>
 

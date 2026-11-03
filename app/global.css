@@ -6,6 +6,20 @@
 @source "./**/*.{ts,tsx}";
 
 :root {
+  --risk-low: 152 60% 28%;
+  --risk-medium: 38 90% 34%;
+  --risk-high: 22 90% 42%;
+  --risk-critical: 0 72% 45%;
+}
+
+.dark {
+  --risk-low: 152 50% 58%;
+  --risk-medium: 42 85% 62%;
+  --risk-high: 25 90% 64%;
+  --risk-critical: 0 85% 70%;
+}
+
+:root {
   --background: 0 0% 100%;
   --foreground: 0 0% 10%;
   --card: 0 0% 100%;
