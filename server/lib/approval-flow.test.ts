@@ -1,5 +1,5 @@
 import type { ActionRunContext } from "@agent-native/core/action";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Real actions against a real, throwaway Postgres, so the local dev database is
@@ -130,6 +130,31 @@ describe("who can decide", () => {
       ).rejects.toThrow(/inbox or chat/);
     },
   );
+
+  it.each([
+    ["a delegated A2A call", { networkProtocol: "a2a" as const }],
+    ["a delegated MCP call", { networkProtocol: "mcp" as const }],
+    ["an automation", { automation: {} as ActionRunContext["automation"] }],
+  ])("refuses %s even though it runs as a tool", async (_name, extra) => {
+    const { id } = await file({ amount: 180 });
+    const delegated = ctx("tool", extra as Partial<ActionRunContext>);
+    await expect(
+      decide.run({ id, verdict: "reject" }, delegated),
+    ).rejects.toThrow(/inbox or chat/);
+    await expect(
+      setPolicy.run(
+        { op: "add", kind: "always_review", actionType: "purchase" },
+        delegated,
+      ),
+    ).rejects.toThrow(/inbox or chat/);
+    const gate = decide.needsApproval as (
+      args: { verdict: string },
+      context?: ActionRunContext,
+    ) => boolean;
+    expect(gate({ verdict: "reject" }, delegated)).toBe(true);
+    const { request } = await getRequest.run({ id }, inbox);
+    expect(request.status).toBe("pending");
+  });
 
   it("records the inbox as a person", async () => {
     const { id } = await file({ amount: 180 });
@@ -448,6 +473,46 @@ describe("using an approval", () => {
       externalAgent,
     );
     expect(request.status).toBe("executed");
+  });
+
+  it("judges expiry after waiting for the lock, not before", async () => {
+    const id = await approved();
+    const { approvalRequests: requests } = schema;
+    await getDb()
+      .update(requests)
+      .set({ approvalExpiresAt: new Date(Date.now() + 400).toISOString() })
+      .where(eq(requests.id, id));
+
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holder = getDb().transaction(async (tx) => {
+      await tx.select().from(requests).where(eq(requests.id, id)).for("update");
+      await released;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const attempt = Promise.resolve(
+      executeRequest.run({ id, performedBy: "caller" }, externalAgent),
+    ).then(
+      () => "ran",
+      (error: Error) => error.message,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    release();
+    await holder;
+    expect(await attempt).toMatch(/expired/);
+  });
+
+  it("treats an approval with no expiry as expired", async () => {
+    const id = await approved();
+    await getDb()
+      .update(schema.approvalRequests)
+      .set({ approvalExpiresAt: null })
+      .where(eq(schema.approvalRequests.id, id));
+    await expect(
+      executeRequest.run({ id, performedBy: "caller" }, externalAgent),
+    ).rejects.toThrow(/expired/);
   });
 
   it("gives auto-approvals an expiry too", async () => {

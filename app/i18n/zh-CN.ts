@@ -89,6 +89,7 @@ const messages = {
     nothingWaiting: "没有等你决定的事。",
     moreWaiting: "显示最新的 {{shown}} 个，共 {{total}} 个。",
     expired: "这次批准已过期。退回收件箱后可以重新决定。",
+    agentRunsIt: "已批准。提出申请的 Agent 会自己使用这次批准。",
     selectPrompt: "选择一个申请来审阅。",
     loadFailed: "无法加载收件箱。",
     notFound: "这个申请不存在。",

@@ -7,6 +7,9 @@ const agentNativePlugins = agentNative as unknown as (
   options?: Parameters<typeof agentNative>[0],
 ) => any[];
 export default defineConfig({
+  // The framework defaults to every network interface. Anyone on the same network
+  // with a session could then reach the dev server.
+  server: { host: "localhost" },
   optimizeDeps: {
     entries: [
       "app/entry.client.tsx",

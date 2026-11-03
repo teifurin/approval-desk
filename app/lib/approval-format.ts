@@ -35,7 +35,7 @@ export function isApprovalExpired(
   request: Pick<RequestView, "approvalExpiresAt">,
 ): boolean {
   return (
-    request.approvalExpiresAt !== null &&
+    request.approvalExpiresAt === null ||
     new Date(request.approvalExpiresAt).getTime() <= Date.now()
   );
 }

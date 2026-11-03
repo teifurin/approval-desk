@@ -34,6 +34,9 @@ export default defineAction({
   allowPersistentApproval: false,
   authorize: requireAppCaller,
   mcpTool: false,
+  // An extension iframe's request carries the person's cookies, so it could pass
+  // for the signed-in UI without the person doing anything.
+  toolCallable: false,
   schema: z.object({
     id: z.string().min(1).describe("Request id"),
     verdict: z
@@ -68,8 +71,6 @@ export default defineAction({
     }
     const { approvalRequests: requests, approvalDecisions: decisions } = schema;
     const { decidedBy, channel } = decisionOrigin(ctx);
-    const nowDate = new Date();
-    const now = nowDate.toISOString();
 
     return getDb().transaction(async (tx) => {
       const [row] = await tx
@@ -82,6 +83,9 @@ export default defineAction({
           statusCode: 404,
         });
       }
+      // Taken after the lock, since waiting for it can take a while.
+      const nowDate = new Date();
+      const now = nowDate.toISOString();
 
       const heldOrRejectedAfterApproval =
         row.status === "approved" && verdict !== "approve";

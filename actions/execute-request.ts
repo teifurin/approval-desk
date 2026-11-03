@@ -17,6 +17,8 @@ export default defineAction({
   description:
     'Use an approved request, once. It acts on exactly what was approved and takes no new content. By default a mock executor simulates it and nothing real happens; with performedBy "caller", you run it yourself right after this and the call only marks the approval used, so read it back with get-request and do exactly what it says.',
   mcpTool: true,
+  // An extension iframe has no business using a person's approval.
+  toolCallable: false,
   mcpAnnotations: {
     readOnlyHint: false,
     destructiveHint: false,
@@ -40,7 +42,6 @@ export default defineAction({
   run: async ({ id, performedBy }, ctx) => {
     const ownerEmail = requireUser(ctx);
     const { approvalRequests: requests } = schema;
-    const now = new Date().toISOString();
 
     return getDb().transaction(async (tx) => {
       const [row] = await tx
@@ -60,7 +61,10 @@ export default defineAction({
           { statusCode: 409 },
         );
       }
-      if (row.approvalExpiresAt && row.approvalExpiresAt <= now) {
+      // Taken after the lock: an approval can expire while waiting for it. Rows
+      // approved before expiry existed have none, and count as expired.
+      const now = new Date().toISOString();
+      if (!row.approvalExpiresAt || row.approvalExpiresAt <= now) {
         return errors.noWrite(
           "This approval expired. Send it back to the inbox or ask again.",
           "approval_expired",

@@ -63,15 +63,29 @@ export function requireUser(ctx: ActionRunContext | undefined): string {
 }
 
 /**
+ * Whether a call came from outside this app's own UI and chat. A delegated A2A
+ * call runs as `caller: "tool"` too, so the caller alone isn't enough. This is the
+ * same test as the framework's `isOutsideAgentCall`, which it doesn't export.
+ */
+function isOutsideCall(ctx: ActionRunContext | undefined): boolean {
+  return (
+    ctx?.networkProtocol !== undefined ||
+    ctx?.automation !== undefined ||
+    (ctx?.caller !== "frontend" && ctx?.caller !== "tool")
+  );
+}
+
+/**
  * Deciding and changing rules belong to the app: the person's inbox and the chat
- * agent. External agents, tokens over HTTP, automations, and the CLI can't, so an
- * agent with a shell can't approve itself with `pnpm action decide --approved`.
+ * agent. External agents, tokens over HTTP, A2A delegation, automations, and the
+ * CLI can't, so an agent with a shell can't approve itself with
+ * `pnpm action decide --approved`.
  */
 export function requireAppCaller(
   _args: unknown,
   ctx: ActionRunContext | undefined,
 ): void {
-  if (ctx?.caller !== "frontend" && ctx?.caller !== "tool") {
+  if (isOutsideCall(ctx)) {
     fail("Only the app's inbox or chat can do this.", {
       errorCode: "caller_not_allowed",
       statusCode: 403,
@@ -80,12 +94,12 @@ export function requireAppCaller(
 }
 
 /**
- * The approval gate for app-only actions. Everything except the chat agent must
- * prove it is the signed-in UI, which the framework checks; the frontend header
- * alone proves nothing.
+ * The approval gate for app-only actions. Everything except this app's own chat
+ * agent must prove it is the signed-in UI, which the framework checks; the
+ * frontend header alone proves nothing.
  */
 export function mustProveUi(ctx: ActionRunContext | undefined): boolean {
-  return ctx?.caller !== "tool";
+  return ctx?.caller !== "tool" || isOutsideCall(ctx);
 }
 
 /** Whether a person stood behind this call: the proven UI or a clicked Approve. */

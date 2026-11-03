@@ -114,13 +114,17 @@ function ApprovedPanel({ request }: { request: RequestView }) {
   const decide = useActionMutation("decide", { onError });
   const busy = execute.isPending || decide.isPending;
   const expired = isApprovalExpired(request);
+  // An external agent uses its own approval. Simulating it here would use it up.
+  const agentRunsIt = request.caller === "mcp";
   return (
     <div className="flex flex-col gap-2">
       {expired ? (
         <p className="text-sm text-muted-foreground">{t("inbox.expired")}</p>
+      ) : agentRunsIt ? (
+        <p className="text-sm text-muted-foreground">{t("inbox.agentRunsIt")}</p>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        {expired ? null : (
+        {expired || agentRunsIt ? null : (
           <Button
             disabled={busy}
             onClick={() => execute.mutate({ id: request.id })}

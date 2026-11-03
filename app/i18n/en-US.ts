@@ -93,6 +93,7 @@ const messages = {
     nothingWaiting: "Nothing is waiting for you.",
     moreWaiting: "Showing the newest {{shown}} of {{total}}.",
     expired: "This approval expired. Send it back to the inbox to decide again.",
+    agentRunsIt: "Approved. The agent that asked uses this approval itself.",
     selectPrompt: "Select a request to review it.",
     loadFailed: "Could not load the inbox.",
     notFound: "This request doesn't exist.",

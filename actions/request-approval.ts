@@ -83,13 +83,13 @@ export default defineAction({
   }),
   run: async (args, ctx) => {
     const ownerEmail = requireUser(ctx);
-    const now = new Date();
-    const createdAt = now.toISOString();
     const amountCents = args.amount === undefined ? null : usdToCents(args.amount);
 
     return getDb().transaction(async (tx) => {
       // One writer per person at a time, so the 24-hour total can't be raced.
       await lockOwnerRules(tx, ownerEmail);
+      const now = new Date();
+      const createdAt = now.toISOString();
       const rules = await loadRules(tx, ownerEmail);
       const evaluation = evaluateRequest(
         {

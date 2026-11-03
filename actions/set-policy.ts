@@ -193,15 +193,18 @@ export default defineAction({
   allowPersistentApproval: false,
   authorize: requireAppCaller,
   mcpTool: false,
+  // An extension iframe's request carries the person's cookies, so it could pass
+  // for the signed-in UI without the person doing anything.
+  toolCallable: false,
   schema,
   outputSchema: z.object({ id: z.string(), policy: policyViewSchema }),
   errors,
   run: async (args, ctx) => {
     const ownerEmail = requireUser(ctx);
-    const now = new Date().toISOString();
 
     return getDb().transaction(async (tx) => {
       await lockOwnerRules(tx, ownerEmail);
+      const now = new Date().toISOString();
       const rules = await loadRules(tx, ownerEmail);
       const change = changeFrom(args, rules);
       // The gate read the rules earlier. Another change may have landed since, so
