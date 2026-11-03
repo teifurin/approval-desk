@@ -161,6 +161,8 @@ describe("which commands are gated", () => {
     "git -c a=b push",
     "git --no-pager push origin main",
     "git -C repo -c a=b push",
+    "git.exe push origin main",
+    "/usr/bin/git push origin main",
     "cd x && git push",
     'sh -c "git push"',
     "gh pr merge 1",
@@ -175,7 +177,14 @@ describe("which commands are gated", () => {
     expect(denial(output)).toContain("Approval Desk could not be reached");
   });
 
-  it.each(["ls -la", "git status", "git log --oneline", "npm test", "rm notes.txt"])(
+  it.each([
+    "ls -la",
+    "git status",
+    "git log --oneline",
+    "git status; echo push",
+    "npm test",
+    "rm notes.txt",
+  ])(
     "leaves %s alone",
     async (command) => {
       const { code, output } = await runHook(command);
@@ -188,6 +197,57 @@ describe("which commands are gated", () => {
   it("leaves a tool call with no command alone", async () => {
     const { output } = await runHook(undefined);
     expect(output).toBe("");
+  });
+
+  it("stays fast on a command with a very long option list", async () => {
+    const options = "-a ".repeat(5_000);
+    const started = Date.now();
+    const ordinary = await runHook(`git ${options}x`);
+    expect(ordinary.output).toBe("");
+    const risky = await runHook(`git ${options}push`);
+    expect(denial(risky.output)).toContain("could not be reached");
+    expect(Date.now() - started).toBeLessThan(8_000);
+  });
+});
+
+describe("bad settings", () => {
+  const command = "git push origin main";
+
+  it.each([
+    ["an invalid gate pattern", { APPROVAL_DESK_GATED: "(" }],
+    ["a wait that isn't a number", { APPROVAL_DESK_WAIT_SECONDS: "soon" }],
+    ["a timeout that isn't a number", { APPROVAL_DESK_REQUEST_TIMEOUT_SECONDS: "soon" }],
+    ["a negative wait", { APPROVAL_DESK_WAIT_SECONDS: "-5" }],
+  ])("block the command rather than crash: %s", async (_name, env) => {
+    const { output } = await runHook(command, env);
+    expect(denial(output)).toContain("stays blocked");
+  });
+
+  it("deny within the time limit when a custom pattern never finishes", async () => {
+    const started = Date.now();
+    const { output } = await runHook("a".repeat(40), {
+      APPROVAL_DESK_GATED: "^(a+)+$x",
+      APPROVAL_DESK_REQUEST_TIMEOUT_SECONDS: "1",
+    });
+    expect(denial(output)).toContain("did not answer in time");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("deny when the input isn't readable", async () => {
+    const { port } = server.address() as AddressInfo;
+    const result = await new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, [SCRIPT], {
+        env: { ...process.env, APPROVAL_DESK_URL: `http://127.0.0.1:${port}` },
+      });
+      let output = "";
+      child.stdout.on("data", (chunk) => {
+        output += String(chunk);
+      });
+      child.on("error", reject);
+      child.on("close", () => resolve(output));
+      child.stdin.end("not json");
+    });
+    expect(denial(result)).toContain("stays blocked");
   });
 });
 
