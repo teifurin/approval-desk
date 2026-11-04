@@ -286,7 +286,7 @@ function DecisionLine({ decision }: { decision: DecisionView }) {
 export default function RequestRoute() {
   const t = useT();
   const { requestId = "" } = useParams();
-  const { data, isPending, isError } = useActionQuery("explain-request", {
+  const { data, isPending, isError, error } = useActionQuery("explain-request", {
     id: requestId,
   });
 
@@ -300,9 +300,13 @@ export default function RequestRoute() {
     );
   }
   if (isError || !data) {
+    // Only a 404 says the request doesn't exist. A stopped server says nothing about it.
+    const missing = (error as { status?: unknown } | null)?.status === 404;
     return (
       <div className="p-6">
-        <p className="text-sm text-muted-foreground">{t("inbox.notFound")}</p>
+        <p className="text-sm text-muted-foreground">
+          {t(missing ? "inbox.notFound" : "inbox.requestLoadFailed")}
+        </p>
         <Link className="mt-3 inline-block text-sm underline" to="/inbox">
           {t("inbox.backToInbox")}
         </Link>

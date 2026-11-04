@@ -97,6 +97,7 @@ const messages = {
     selectPrompt: "选择一个申请来审阅。",
     loadFailed: "无法加载收件箱。",
     notFound: "这个申请不存在。",
+    requestLoadFailed: "无法加载这个申请。请确认服务器在运行，然后刷新页面。",
     backToInbox: "返回收件箱",
     approve: "批准",
     approveAt: "按 {{amount}} 批准",

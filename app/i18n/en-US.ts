@@ -102,6 +102,8 @@ const messages = {
     selectPrompt: "Select a request to review it.",
     loadFailed: "Could not load the inbox.",
     notFound: "This request doesn't exist.",
+    requestLoadFailed:
+      "Could not load this request. Check that the server is running, then refresh.",
     backToInbox: "Back to inbox",
     approve: "Approve",
     approveAt: "Approve at {{amount}}",
