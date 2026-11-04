@@ -2,6 +2,7 @@
   "name": "approval-desk",
   "displayName": "Approval Desk",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Workspace app for Approval Desk.",
   "type": "module",
   "scripts": {
