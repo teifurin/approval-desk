@@ -4,8 +4,15 @@ const MINUTE = 60;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
+/** The language the app is showing, which can differ from the browser's. */
+function appLocale(): string | undefined {
+  return typeof document === "undefined"
+    ? undefined
+    : document.documentElement.lang || undefined;
+}
+
 export function formatMoney(amount: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat(appLocale(), {
     style: "currency",
     currency: "USD",
   }).format(amount);
@@ -13,7 +20,7 @@ export function formatMoney(amount: number): string {
 
 export function timeAgo(iso: string): string {
   const seconds = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
-  const format = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const format = new Intl.RelativeTimeFormat(appLocale(), { numeric: "auto" });
   const abs = Math.abs(seconds);
   if (abs < MINUTE) return format.format(seconds, "second");
   if (abs < HOUR) return format.format(Math.round(seconds / MINUTE), "minute");
