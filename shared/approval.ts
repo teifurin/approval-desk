@@ -53,6 +53,37 @@ export const ruleHitSchema = z.object({
 });
 export type RuleHit = z.infer<typeof ruleHitSchema>;
 
+export const MAX_PAYLOAD_CHARS = 32_000;
+
+/** Agents write payloads, and they're stored and shown whole, so they need a limit. */
+export const payloadSchema = z
+  .record(z.string(), z.unknown())
+  .refine((payload) => JSON.stringify(payload).length <= MAX_PAYLOAD_CHARS, {
+    message: `Payload is too large. The limit is ${MAX_PAYLOAD_CHARS} characters.`,
+  });
+
+/** What the chat agent is asking a person to approve, from the call's real arguments. */
+export const agentProposalSchema = z.object({
+  id: z.string(),
+  amount: z.number().nullable(),
+  payload: z.record(z.string(), z.unknown()).nullable(),
+  note: z.string().nullable(),
+  proposedAt: z.string(),
+});
+export type AgentProposal = z.infer<typeof agentProposalSchema>;
+
+/**
+ * Shows characters that change how text reads, such as direction overrides and
+ * zero-width spaces, instead of letting them act. What an agent wrote has to read
+ * on screen the way it would run.
+ */
+export function revealHiddenCharacters(text: string): string {
+  return text.replace(
+    /[؜​-‏‪-‮⁠-⁩﻿]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 export const requestViewSchema = z.object({
   id: z.string(),
   agent: z.string(),

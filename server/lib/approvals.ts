@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import { fail, type ActionRunContext } from "@agent-native/core/action";
+import { recordChange } from "@agent-native/core/server/poll";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 
 import {
+  type AgentProposal,
   APPROVAL_TTL_MS,
   centsToUsd,
   type DecidedBy,
@@ -110,6 +113,91 @@ export function hasPersonApproval(ctx: ActionRunContext | undefined): boolean {
 /** Serializes rule changes and evaluations for one person until the commit. */
 export async function lockOwnerRules(tx: Tx, ownerEmail: string): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ownerEmail}))`);
+}
+
+/**
+ * Puts what the chat agent is asking a person to approve on the request, so the
+ * inbox can show it. The framework's approval card shows only the tool's name. The
+ * gate calls this with the call's real arguments, so what the person reads is what
+ * would run, not the model's description of it.
+ */
+export async function recordAgentProposal(
+  ownerEmail: string,
+  {
+    id,
+    amount,
+    payload,
+    note,
+  }: {
+    id: string;
+    amount?: number | undefined;
+    payload?: Record<string, unknown> | undefined;
+    note?: string | undefined;
+  },
+): Promise<void> {
+  const { approvalRequests: requests } = schema;
+  const proposal: AgentProposal = {
+    id: crypto.randomUUID(),
+    amount: amount ?? null,
+    payload: payload ?? null,
+    note: note ?? null,
+    proposedAt: new Date().toISOString(),
+  };
+  const [updated] = await getDb()
+    .update(requests)
+    .set({ agentProposal: JSON.stringify(proposal) })
+    .where(
+      and(
+        eq(requests.id, id),
+        eq(requests.ownerEmail, ownerEmail),
+        eq(requests.status, "pending"),
+      ),
+    )
+    .returning({ id: requests.id });
+  // The paused call hasn't run, so the framework won't refresh the open inbox.
+  if (updated) {
+    recordChange({
+      source: "action",
+      type: "change",
+      key: "decide",
+      owner: ownerEmail,
+    });
+  }
+}
+
+export function toAgentProposal(row: RequestRow): AgentProposal | null {
+  return parseJson<AgentProposal | null>(row.agentProposal, null);
+}
+
+/** Whether a chat call would approve exactly what the inbox is showing. */
+export function matchesAgentProposal(
+  proposal: AgentProposal | null,
+  {
+    amount,
+    payload,
+    note,
+  }: {
+    amount?: number | undefined;
+    payload?: Record<string, unknown> | undefined;
+    note?: string | undefined;
+  },
+): boolean {
+  if (!proposal) return false;
+  return isDeepStrictEqual(
+    {
+      amount: proposal.amount,
+      payload: proposal.payload,
+      note: proposal.note,
+    },
+    // The stored side has been through JSON, so this has to as well.
+    JSON.parse(
+      JSON.stringify({
+        amount: amount ?? null,
+        payload: payload ?? null,
+        note: note ?? null,
+      }),
+    ),
+  );
 }
 
 export function approvalExpiry(now: Date): string {

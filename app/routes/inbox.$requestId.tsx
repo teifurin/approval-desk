@@ -5,9 +5,13 @@ import {
   useActionQuery,
 } from "@agent-native/core/client/hooks";
 import { useT } from "@agent-native/core/client/i18n";
-import type { DecisionView, RequestView } from "@shared/approval";
+import {
+  revealHiddenCharacters,
+  type DecisionView,
+  type RequestView,
+} from "@shared/approval";
 import { IconArrowLeft, IconMessageCircle } from "@tabler/icons-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -23,6 +27,8 @@ import {
   timeAgo,
 } from "@/lib/approval-format";
 import { cn } from "@/lib/utils";
+
+const PROPOSAL_ARM_MS = 1_500;
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -51,8 +57,98 @@ function DecisionPanel({ request }: { request: RequestView }) {
     request.amount !== null && amountValid && parsedAmount !== request.amount;
   const noteValue = note.trim() || undefined;
 
+  // The form below always starts from what was requested. What the chat agent
+  // proposes takes effect only through its own button, which names the values, so
+  // a proposal can't change what the person's Approve does or what they've typed.
+  const { data: proposalData } = useActionQuery(
+    "get-agent-proposal",
+    { id: request.id },
+    { batchRefetches: false },
+  );
+  const proposal = proposalData?.proposal ?? null;
+  const proposalChanges =
+    proposal !== null && (proposal.amount !== null || proposal.payload !== null);
+
+  // A new proposal pushes the form down, which can put its button under a click
+  // meant for something else, so the button waits a moment before it takes clicks.
+  const proposalId = proposal?.id;
+  const [armedProposalId, setArmedProposalId] = useState<string>();
+  useEffect(() => {
+    if (!proposalId) return undefined;
+    const timer = setTimeout(() => setArmedProposalId(proposalId), PROPOSAL_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [proposalId]);
+
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+      {proposal ? (
+        <div className="flex flex-col gap-2 rounded-lg bg-muted p-3">
+          <p className="text-sm font-medium">
+            {proposal.amount === null
+              ? t("inbox.proposal")
+              : t("inbox.proposalAt", { amount: formatMoney(proposal.amount) })}
+            <span className="ms-2 text-xs font-normal text-muted-foreground">
+              {timeAgo(proposal.proposedAt)}
+            </span>
+          </p>
+          {proposal.payload ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {t("inbox.proposalPayload", {
+                  fields: revealHiddenCharacters(
+                    Object.keys(proposal.payload).join(", "),
+                  ),
+                })}
+              </p>
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-xs">
+                {revealHiddenCharacters(
+                  JSON.stringify(
+                    { ...request.payload, ...proposal.payload },
+                    null,
+                    2,
+                  ),
+                )}
+              </pre>
+            </>
+          ) : null}
+          {proposal.note ? (
+            <p className="text-sm">“{revealHiddenCharacters(proposal.note)}”</p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            {t("inbox.proposalHint")}
+          </p>
+          {proposalChanges ? (
+            <div>
+              <Button
+                className="h-auto max-w-full whitespace-normal"
+                disabled={decide.isPending || armedProposalId !== proposal.id}
+                onClick={() =>
+                  decide.mutate({
+                    id: request.id,
+                    verdict: "approve",
+                    note: noteValue,
+                    proposalId: proposal.id,
+                    ...(proposal.amount === null
+                      ? {}
+                      : { amount: proposal.amount }),
+                    ...(proposal.payload ? { payload: proposal.payload } : {}),
+                  })
+                }
+              >
+                {proposal.amount === null
+                  ? t("inbox.approveProposed")
+                  : proposal.payload
+                    ? t("inbox.approveProposedAt", {
+                        amount: formatMoney(proposal.amount),
+                      })
+                    : t("inbox.approveAt", {
+                        amount: formatMoney(proposal.amount),
+                      })}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-3">
         {request.amount === null ? null : (
           <div className="flex w-32 flex-col gap-1.5">
@@ -78,6 +174,7 @@ function DecisionPanel({ request }: { request: RequestView }) {
       </div>
       <div className="flex flex-wrap gap-2">
         <Button
+          variant={proposalChanges ? "outline" : "default"}
           disabled={decide.isPending || (request.amount !== null && !amountValid)}
           onClick={() =>
             decide.mutate({
@@ -90,7 +187,9 @@ function DecisionPanel({ request }: { request: RequestView }) {
         >
           {amended
             ? t("inbox.approveAt", { amount: formatMoney(parsedAmount) })
-            : t("inbox.approve")}
+            : proposalChanges
+              ? t("inbox.approveAsRequested")
+              : t("inbox.approve")}
         </Button>
         <Button
           variant="outline"
@@ -284,7 +383,7 @@ export default function RequestRoute() {
 
       <Section title={t("inbox.wouldRun")}>
         <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-xs">
-          {JSON.stringify(request.payload, null, 2)}
+          {revealHiddenCharacters(JSON.stringify(request.payload, null, 2))}
         </pre>
       </Section>
 

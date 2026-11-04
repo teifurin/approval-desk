@@ -6,12 +6,16 @@ import { getDb, schema } from "../server/db/index.js";
 import {
   approvalExpiry,
   decisionOrigin,
+  matchesAgentProposal,
   mustProveUi,
+  recordAgentProposal,
   requireAppCaller,
   requireUser,
+  toAgentProposal,
   toRequestView,
 } from "../server/lib/approvals.js";
 import {
+  payloadSchema,
   requestViewSchema,
   usdAmountSchema,
   usdToCents,
@@ -22,6 +26,7 @@ const errors = defineActionErrors(
   "request_not_found",
   "not_decidable",
   "invalid_amendment",
+  "proposal_stale",
 );
 
 export default defineAction({
@@ -30,7 +35,16 @@ export default defineAction({
   // Tightening is free for the chat agent. Approving is not, on any surface, and
   // every other caller has to prove it is the signed-in UI. "Always allow" would
   // let the agent approve by itself, so it can't be turned on for this action.
-  needsApproval: (args, ctx) => args.verdict === "approve" || mustProveUi(ctx),
+  needsApproval: async (args, ctx) => {
+    // The framework's card shows only the tool's name, and this is the one place
+    // that sees a chat call's real arguments as it pauses, so it's where the inbox
+    // gets them. They're only for showing. run checks them again before anything
+    // is approved, so a write that fails can't approve what the screen doesn't say.
+    if (args.verdict === "approve" && !mustProveUi(ctx) && ctx?.userEmail) {
+      await recordAgentProposal(ctx.userEmail, args);
+    }
+    return args.verdict === "approve" || mustProveUi(ctx);
+  },
   allowPersistentApproval: false,
   authorize: requireAppCaller,
   mcpTool: false,
@@ -47,8 +61,7 @@ export default defineAction({
     amount: usdAmountSchema
       .optional()
       .describe("Approve at this amount in US dollars instead of the requested one"),
-    payload: z
-      .record(z.string(), z.unknown())
+    payload: payloadSchema
       .optional()
       .describe("Approve with these payload fields changed; other fields stay"),
     note: z
@@ -57,10 +70,15 @@ export default defineAction({
       .max(1_000)
       .optional()
       .describe("Why, in a sentence, for the audit timeline"),
+    proposalId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Leave this out. The inbox sets it when a person accepts a proposal."),
   }),
   outputSchema: z.object({ id: z.string(), request: requestViewSchema }),
   errors,
-  run: async ({ id, verdict, amount, payload, note }, ctx) => {
+  run: async ({ id, verdict, amount, payload, note, proposalId }, ctx) => {
     const ownerEmail = requireUser(ctx);
     const amended = amount !== undefined || payload !== undefined;
     if (amended && verdict !== "approve") {
@@ -104,6 +122,25 @@ export default defineAction({
         );
       }
 
+      // A card in the chat is bound to its own arguments, but the inbox shows the
+      // latest proposal. Approving takes both saying the same thing, so a person
+      // can't read $120 and click an older card's $1000. This has to be here, under
+      // the lock, because an approved call skips the gate when it comes back.
+      if (verdict === "approve") {
+        const proposal = toAgentProposal(row);
+        const stale =
+          channel === "inbox"
+            ? proposalId !== undefined && proposal?.id !== proposalId
+            : !matchesAgentProposal(proposal, { amount, payload, note });
+        if (stale) {
+          return errors.noWrite(
+            "This proposal has changed since it was shown. Review the request and approve it again.",
+            "proposal_stale",
+            { statusCode: 409 },
+          );
+        }
+      }
+
       const amountCents =
         amount === undefined ? row.amountCents : usdToCents(amount);
       const nextPayload = payload
@@ -125,6 +162,7 @@ export default defineAction({
           decidedBy: verdict === "hold" ? null : decidedBy,
           decidedAt: verdict === "hold" ? null : now,
           approvalExpiresAt: verdict === "approve" ? approvalExpiry(nowDate) : null,
+          agentProposal: null,
         })
         .where(eq(requests.id, id))
         .returning();

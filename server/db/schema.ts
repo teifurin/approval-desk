@@ -30,6 +30,7 @@ export const approvalRequests = pgTable("approval_requests", {
   decidedAt: text("decided_at"),
   executedAt: text("executed_at"),
   approvalExpiresAt: text("approval_expires_at"),
+  agentProposal: text("agent_proposal"),
 });
 
 export const approvalDecisions = pgTable("approval_decisions", {

@@ -57,6 +57,11 @@ CREATE INDEX IF NOT EXISTS approval_policies_owner_idx ON approval_policies (own
       name: "approval-desk-approval-expiry",
       sql: `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS approval_expires_at TEXT`,
     },
+    {
+      version: 3,
+      name: "approval-desk-agent-proposal",
+      sql: `ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS agent_proposal TEXT`,
+    },
   ],
   { table: "approval_desk_migrations" },
 );

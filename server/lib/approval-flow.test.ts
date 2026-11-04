@@ -8,14 +8,23 @@ vi.hoisted(() => {
   process.env.DATABASE_URL = "pglite://memory";
 });
 
+vi.mock("@agent-native/core/server/poll", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@agent-native/core/server/poll")>()),
+  recordChange: vi.fn(),
+}));
+
+import { recordChange } from "@agent-native/core/server/poll";
+
 import decide from "../../actions/decide.js";
 import executeRequest from "../../actions/execute-request.js";
 import explainRequest from "../../actions/explain-request.js";
+import getAgentProposal from "../../actions/get-agent-proposal.js";
 import getRequest from "../../actions/get-request.js";
 import listPolicies from "../../actions/list-policies.js";
 import listRequests from "../../actions/list-requests.js";
 import requestApproval from "../../actions/request-approval.js";
 import setPolicy from "../../actions/set-policy.js";
+import { MAX_PAYLOAD_CHARS, revealHiddenCharacters } from "../../shared/approval.js";
 import { getDb, schema } from "../db/index.js";
 import migrate from "../plugins/db.js";
 import { CHAT_ACTION_NAMES, resolveChatActionSurface } from "./agent-surface.js";
@@ -36,6 +45,21 @@ const inbox = ctx("frontend");
 const chatAgent = ctx("tool");
 const chatApproved = ctx("tool", { approvedToolCallKey: "approved-key" });
 const externalAgent = ctx("mcp");
+
+const decideGate = decide.needsApproval as (
+  args: {
+    id: string;
+    verdict: string;
+    amount?: number;
+    payload?: Record<string, unknown>;
+    note?: string;
+  },
+  context?: ActionRunContext,
+) => Promise<boolean>;
+
+async function proposalOf(id: string) {
+  return (await getAgentProposal.run({ id }, inbox)).proposal;
+}
 
 async function file(
   args: Partial<Parameters<typeof requestApproval.run>[0]> = {},
@@ -147,11 +171,7 @@ describe("who can decide", () => {
         delegated,
       ),
     ).rejects.toThrow(/inbox or chat/);
-    const gate = decide.needsApproval as (
-      args: { verdict: string },
-      context?: ActionRunContext,
-    ) => boolean;
-    expect(gate({ verdict: "reject" }, delegated)).toBe(true);
+    expect(await decideGate({ id, verdict: "reject" }, delegated)).toBe(true);
     const { request } = await getRequest.run({ id }, inbox);
     expect(request.status).toBe("pending");
   });
@@ -165,6 +185,7 @@ describe("who can decide", () => {
 
   it("records a clicked Approve in chat as a person", async () => {
     const { id } = await file({ amount: 180 });
+    await decideGate({ id, verdict: "approve" }, chatAgent);
     await decide.run({ id, verdict: "approve" }, chatApproved);
     const { decisions } = await getRequest.run({ id }, inbox);
     expect(decisions[0]).toMatchObject({
@@ -180,17 +201,293 @@ describe("who can decide", () => {
     expect(decisions[0]).toMatchObject({ decidedBy: "agent", channel: "chat" });
   });
 
-  it("gates every caller but the chat agent on proving the UI", () => {
-    const gate = decide.needsApproval as (
-      args: { verdict: string },
-      context?: ActionRunContext,
-    ) => boolean;
-    expect(gate({ verdict: "reject" }, chatAgent)).toBe(false);
-    expect(gate({ verdict: "hold" }, chatAgent)).toBe(false);
-    expect(gate({ verdict: "approve" }, chatAgent)).toBe(true);
+  it("gates every caller but the chat agent on proving the UI", async () => {
+    const id = "missing";
+    expect(await decideGate({ id, verdict: "reject" }, chatAgent)).toBe(false);
+    expect(await decideGate({ id, verdict: "hold" }, chatAgent)).toBe(false);
+    expect(await decideGate({ id, verdict: "approve" }, chatAgent)).toBe(true);
     for (const caller of ["http", "mcp", "frontend"] as Caller[]) {
-      expect(gate({ verdict: "reject" }, ctx(caller))).toBe(true);
+      expect(await decideGate({ id, verdict: "reject" }, ctx(caller))).toBe(true);
     }
+  });
+});
+
+describe("what the chat agent proposes", () => {
+  it("shows the call's real arguments on the request, without deciding", async () => {
+    const { id } = await file({ amount: 180 });
+    const stopped = await decideGate(
+      { id, verdict: "approve", amount: 120, note: "Agreed budget" },
+      chatAgent,
+    );
+    expect(stopped).toBe(true);
+
+    const { request, decisions } = await getRequest.run({ id }, inbox);
+    expect(request.status).toBe("pending");
+    expect(request.amount).toBe(180);
+    expect(decisions).toEqual([]);
+    expect(await proposalOf(id)).toMatchObject({
+      amount: 120,
+      payload: null,
+      note: "Agreed budget",
+    });
+  });
+
+  it("includes a changed payload", async () => {
+    const { id } = await file({ payload: { item: "desk" } });
+    await decideGate(
+      { id, verdict: "approve", payload: { item: "small desk" } },
+      chatAgent,
+    );
+    const { request } = await getRequest.run({ id }, inbox);
+    expect((await proposalOf(id))?.payload).toEqual({ item: "small desk" });
+    expect(request.payload).toEqual({ item: "desk" });
+  });
+
+  it("tells the open inbox, since a paused call counts as nothing having run", async () => {
+    const { id } = await file({ amount: 180 });
+    vi.mocked(recordChange).mockClear();
+    await decideGate({ id, verdict: "approve", amount: 120 }, chatAgent);
+    expect(recordChange).toHaveBeenCalledWith({
+      source: "action",
+      type: "change",
+      key: "decide",
+      owner: OWNER,
+    });
+  });
+
+  it("changes nothing unless a person approves those values", async () => {
+    const { id } = await file({ amount: 180, payload: { item: "desk" } });
+    await decideGate(
+      { id, verdict: "approve", amount: 120, payload: { item: "small desk" } },
+      chatAgent,
+    );
+    const { request } = await decide.run({ id, verdict: "approve" }, inbox);
+    expect(request.amount).toBe(180);
+    expect(request.payload).toEqual({ item: "desk" });
+  });
+
+  it("is cleared by any decision", async () => {
+    for (const verdict of ["approve", "reject"] as const) {
+      const { id } = await file({ amount: 180 });
+      await decideGate({ id, verdict: "approve", amount: 120 }, chatAgent);
+      await decide.run({ id, verdict }, inbox);
+      expect(await proposalOf(id)).toBeNull();
+    }
+  });
+
+  it("isn't recorded for a rejection or a hold", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate({ id, verdict: "reject" }, chatAgent);
+    expect(await proposalOf(id)).toBeNull();
+  });
+
+  it.each(["mcp", "http", "frontend", "a2a", "cli"] as Caller[])(
+    "can't be written by %s",
+    async (caller) => {
+      const { id } = await file({ amount: 180 });
+      await decideGate({ id, verdict: "approve", amount: 1 }, ctx(caller));
+      expect(await proposalOf(id)).toBeNull();
+    },
+  );
+
+  it("can't be written from a delegated call that runs as a tool", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(
+      { id, verdict: "approve", amount: 1 },
+      ctx("tool", { networkProtocol: "a2a" }),
+    );
+    expect(await proposalOf(id)).toBeNull();
+  });
+
+  it("can't reach another person's request", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(
+      { id, verdict: "approve", amount: 1 },
+      ctx("tool", { userEmail: "other@example.com" }),
+    );
+    expect(await proposalOf(id)).toBeNull();
+  });
+
+  it("doesn't touch a request that is already decided", async () => {
+    const { id } = await file({ amount: 180 });
+    await decide.run({ id, verdict: "reject" }, inbox);
+    vi.mocked(recordChange).mockClear();
+    await decideGate({ id, verdict: "approve", amount: 1 }, chatAgent);
+    expect(await proposalOf(id)).toBeNull();
+    expect(recordChange).not.toHaveBeenCalled();
+  });
+
+  it("refuses a payload too large to store and show", async () => {
+    const payload = { text: "x".repeat(MAX_PAYLOAD_CHARS) };
+    const { id } = await file({ amount: 180 });
+    await expect(
+      decide.run({ id, verdict: "approve", payload }, inbox),
+    ).rejects.toThrow();
+    await expect(file({ payload })).rejects.toThrow();
+  });
+
+  it("shows characters that change how text reads", () => {
+    expect(revealHiddenCharacters("pay‮me​")).toBe("pay\\u202eme\\u200b");
+    expect(revealHiddenCharacters("plain $120 备注")).toBe("plain $120 备注");
+  });
+});
+
+describe("approving what the inbox shows", () => {
+  const approve = (id: string, amount: number) => ({
+    id,
+    verdict: "approve" as const,
+    amount,
+  });
+
+  it("lets a chat approval through when it matches the proposal", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(approve(id, 120), chatAgent);
+    const { request } = await decide.run(approve(id, 120), chatApproved);
+    expect(request.status).toBe("approved");
+    expect(request.amount).toBe(120);
+    expect(await proposalOf(id)).toBeNull();
+  });
+
+  it("doesn't care what order the payload's keys are in", async () => {
+    const { id } = await file({ payload: { item: "desk" } });
+    await decideGate(
+      { id, verdict: "approve", payload: { a: 1, b: { c: 2, d: 3 } } },
+      chatAgent,
+    );
+    const { request } = await decide.run(
+      { id, verdict: "approve", payload: { b: { d: 3, c: 2 }, a: 1 } },
+      chatApproved,
+    );
+    expect(request.status).toBe("approved");
+  });
+
+  it("refuses an older card once a newer proposal is on screen", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(approve(id, 1000), chatAgent);
+    await decideGate(approve(id, 120), chatAgent);
+
+    await expect(decide.run(approve(id, 1000), chatApproved)).rejects.toThrow(
+      /changed/,
+    );
+
+    const { request, decisions } = await getRequest.run({ id }, inbox);
+    expect(request.status).toBe("pending");
+    expect(request.amount).toBe(180);
+    expect(decisions).toEqual([]);
+    expect((await proposalOf(id))?.amount).toBe(120);
+  });
+
+  it("refuses an old card after the request came back to the inbox", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(approve(id, 1000), chatAgent);
+    await decide.run({ id, verdict: "approve", amount: 120 }, inbox);
+    await decide.run({ id, verdict: "hold" }, inbox);
+
+    await expect(decide.run(approve(id, 1000), chatApproved)).rejects.toThrow(
+      /changed/,
+    );
+    const { request } = await getRequest.run({ id }, inbox);
+    expect(request.status).toBe("pending");
+    expect(request.amount).toBe(120);
+  });
+
+  it("refuses a card whose proposal never reached the screen", async () => {
+    const { id } = await file({ amount: 180 });
+    await expect(decide.run(approve(id, 1000), chatApproved)).rejects.toThrow(
+      /changed/,
+    );
+  });
+
+  it("refuses a card that differs from the proposal only by its note", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate({ id, verdict: "approve", note: "First" }, chatAgent);
+    await decideGate({ id, verdict: "approve", note: "Second" }, chatAgent);
+    await expect(
+      decide.run({ id, verdict: "approve", note: "First" }, chatApproved),
+    ).rejects.toThrow(/changed/);
+  });
+
+  it("refuses a proposal the inbox showed before it was replaced", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(approve(id, 1000), chatAgent);
+    const shown = await proposalOf(id);
+    await decideGate(approve(id, 120), chatAgent);
+
+    await expect(
+      decide.run(
+        { id, verdict: "approve", amount: 1000, proposalId: shown?.id },
+        inbox,
+      ),
+    ).rejects.toThrow(/changed/);
+
+    const current = await proposalOf(id);
+    const { request } = await decide.run(
+      { id, verdict: "approve", amount: 120, proposalId: current?.id },
+      inbox,
+    );
+    expect(request.amount).toBe(120);
+  });
+
+  it("gives each proposal its own id, even with the same values", async () => {
+    const { id } = await file({ amount: 180 });
+    await decideGate(approve(id, 120), chatAgent);
+    const first = await proposalOf(id);
+    await decideGate(approve(id, 120), chatAgent);
+    expect((await proposalOf(id))?.id).not.toBe(first?.id);
+  });
+});
+
+describe("who can read a proposal", () => {
+  async function fileWithSecretProposal() {
+    const { id } = await file({ amount: 180 });
+    await decideGate(
+      {
+        id,
+        verdict: "approve",
+        note: "SECRET-NOTE",
+        payload: { copied: "SECRET-PAYLOAD" },
+      },
+      chatAgent,
+    );
+    return id;
+  }
+
+  it.each([
+    ["an external agent", externalAgent],
+    ["the inbox", inbox],
+    ["the chat agent", chatAgent],
+  ])("isn't in the request views %s reads", async (_name, reader) => {
+    const id = await fileWithSecretProposal();
+    const views = [
+      await getRequest.run({ id }, reader),
+      await listRequests.run({}, reader),
+      await explainRequest.run({ id }, reader),
+    ];
+    for (const view of views) {
+      expect(JSON.stringify(view)).not.toMatch(/SECRET|agentProposal/);
+    }
+  });
+
+  it.each(["mcp", "http", "a2a", "cli", "tool"] as Caller[])(
+    "takes the signed-in UI, so %s can't",
+    async (caller) => {
+      const id = await fileWithSecretProposal();
+      await expect(getAgentProposal.run({ id }, ctx(caller))).rejects.toThrow();
+    },
+  );
+
+  it("is offered to no agent at all", () => {
+    expect(getAgentProposal.uiOnly).toBe(true);
+    expect(CHAT_ACTION_NAMES).not.toContain("get-agent-proposal");
+  });
+
+  it("stays with the person it belongs to", async () => {
+    const id = await fileWithSecretProposal();
+    const { proposal } = await getAgentProposal.run(
+      { id },
+      ctx("frontend", { userEmail: "other@example.com" }),
+    );
+    expect(proposal).toBeNull();
   });
 });
 
@@ -610,5 +907,17 @@ describe("the chat agent's tools", () => {
       resolveChatActionSurface({ availableActionNames: ["decide"] })
         .allowedActionNames,
     ).toEqual(["decide"]);
+  });
+
+  it("leave out decide while planning, because its gate records a proposal", () => {
+    const availableActionNames = ["decide", "list-requests"];
+    expect(
+      resolveChatActionSurface({ availableActionNames, mode: "plan" })
+        .allowedActionNames,
+    ).toEqual(["list-requests"]);
+    expect(
+      resolveChatActionSurface({ availableActionNames, mode: "act" })
+        .allowedActionNames,
+    ).toEqual(["list-requests", "decide"]);
   });
 });

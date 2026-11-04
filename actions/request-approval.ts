@@ -15,6 +15,7 @@ import { evaluateRequest } from "../server/lib/policy.js";
 import {
   ACTION_TYPES,
   centsToUsd,
+  payloadSchema,
   REQUEST_STATUSES,
   RISK_LEVELS,
   ruleHitSchema,
@@ -56,8 +57,7 @@ export default defineAction({
     amount: usdAmountSchema
       .optional()
       .describe("Amount in US dollars, when the action costs money"),
-    payload: z
-      .record(z.string(), z.unknown())
+    payload: payloadSchema
       .default({})
       .describe(
         'Exactly what would run, e.g. {"command": "git push origin main"} or {"to": "a@b.com", "subject": "Hi"}; rules read these values',
