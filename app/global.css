@@ -94,6 +94,13 @@
   inline-size: 100%;
 }
 
+/* This app has no voice. The sidebar composer always offers it, with no prop to
+   turn it off, and voice chat would only fail against its closed route. */
+[data-agent-composer-slot="voice-button"],
+[data-composer-primary="voice-chat"] {
+  display: none;
+}
+
 .agent-kit-chat-guided-question {
   max-block-size: min(32rem, 58dvh);
   overflow: auto;

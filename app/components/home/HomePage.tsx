@@ -128,7 +128,7 @@ function HomeAgentComposerInput({
       placeholder={t("chat.composerPlaceholder")}
       plusMenuMode="hidden"
       attachmentsEnabled={false}
-      voiceEnabled
+      voiceEnabled={false}
       onVoiceChatStart={onVoiceChatStart}
       onSubmit={async (text, files, references, options) => {
         const uploadedAttachments = files.length

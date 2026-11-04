@@ -1494,7 +1494,7 @@ function ChatCanvas({
           queueWhileRunning: true,
           autoFocus: true,
           plusMenuMode: "full",
-          voiceEnabled: true,
+          voiceEnabled: false,
           includeDefaultSlashCommands: false,
           includeDefaultSlashSkills: false,
         }}
