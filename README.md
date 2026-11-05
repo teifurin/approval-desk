@@ -7,7 +7,18 @@ Agent-Native Hackathon.
 **Demo video:** [recorded with Clips](https://clips.agent-native.com/r/GZoaIKfHT0IG)
 (4:46, one take in real time, so the pauses are the model working). Clicks are
 scripted and the narration is text-to-speech. The app, the model, and Claude Code
-are real, and the purchases are simulated.
+are real, and the purchases are simulated. Since the recording, approving also reads
+the rules again, and the audit page shows both sides of a change.
+
+| Time | In the video |
+|---|---|
+| 0:23 | Rules set by chatting. The looser one waits for a click at 0:55 |
+| 1:56 | A rule approves a $12 purchase on the spot |
+| 2:02 | A $180 purchase waits for a person |
+| 2:43 | The agent proposes $120, and a person approves it at 3:04 |
+| 3:50 | A rule blocks Claude Code's force push |
+| 3:59 | A normal push waits. It's approved at 4:07 and pushed at 4:11 |
+| 4:16 | The audit trail |
 
 AI agents can now spend money, send email, and push code. Approval Desk is the
 checkpoint in front of those actions:
@@ -18,8 +29,9 @@ checkpoint in front of those actions:
   or holds it for a person. No model takes part in that decision.
 - **A person decides,** in the inbox or in the chat. Both run the same `decide`
   action.
-- **It's on the record.** The audit page shows who decided, where, and which rule
-  applied.
+- **It's on the record.** The audit page shows who decided, where, and what changed,
+  and it names the rule when a rule decided. Each request's page shows the rules it
+  hit.
 
 The agent can always make things stricter. Anything looser, such as approving a
 request or adding an auto-approval, pauses until a person clicks Approve on that
@@ -64,17 +76,19 @@ fails otherwise. If PowerShell refuses to run `pnpm`, use `pnpm.cmd`.
 
 ## Try it
 
-1. Click **Simulate**, then **$180 purchase**. It waits in the inbox, and its page
-   shows why it's there and how it compares with past requests.
-2. In the chat, send: `Auto-approve purchases under $20, and always ask me about
+1. Click **Simulate**, then **$12 purchase**, and click **Approve** on its page. Do
+   this twice, so there's history to compare with.
+2. Click **Simulate**, then **$180 purchase**. It waits in the inbox, and its page
+   shows why it's there and how it compares with those two.
+3. In the chat, send: `Auto-approve purchases under $20, and always ask me about
    external email.` The stricter rule applies at once. The looser one waits for you
    to click Approve. Both then show on the **Rules** page.
-3. Click **Simulate**, then **$12 purchase**. The rule approves it on the spot.
-4. Open the $180 request and click **Ask the agent about this**.
-5. In the chat, send: `Approve it at $120 instead.` The proposal appears on the
+4. Click **Simulate**, then **$12 purchase**. The rule approves it on the spot.
+5. Open the $180 request and click **Ask the agent about this**.
+6. In the chat, send: `Approve it at $120 instead.` The proposal appears on the
    request's page, taken from the call's real arguments. Nothing changes until you
    approve, in the chat or on the page.
-6. Open **Audit**.
+7. Open **Audit**. The decision shows `$180.00 → $120.00`.
 
 ## Connect Claude Code
 
@@ -142,6 +156,10 @@ What keeps those lines in place:
   shell, or raw SQL. See [`server/lib/agent-surface.ts`](server/lib/agent-surface.ts).
 - **An approval is tied to what was shown.** An old chat card can't approve an amount
   that's no longer the proposal.
+- **A block beats an approval.** Approving reads the rules again against the final
+  amount and payload, and a rule that blocks them refuses the approval, even for a
+  change a person accepted. To do the blocked thing anyway, a person turns the rule
+  off first.
 - **Framework routes that reach past the gates are closed:** `db-admin`,
   `realtime-voice`, A2A, and the agent card, none of which has a setting to turn it
   off. See [`server/lib/closed-routes.ts`](server/lib/closed-routes.ts).

@@ -15,6 +15,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 
+import { AmendmentLines } from "@/components/amendment-lines";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -250,14 +251,8 @@ function ApprovedPanel({ request }: { request: RequestView }) {
   );
 }
 
-function amendedAmount(decision: DecisionView): number | null {
-  const amount = decision.amendedFrom?.amount;
-  return typeof amount === "number" ? amount : null;
-}
-
 function DecisionLine({ decision }: { decision: DecisionView }) {
   const t = useT();
-  const previous = amendedAmount(decision);
   return (
     <li className="flex flex-col gap-0.5 text-sm">
       <span>
@@ -266,15 +261,16 @@ function DecisionLine({ decision }: { decision: DecisionView }) {
           {timeAgo(decision.createdAt)}
         </span>
       </span>
+      <AmendmentLines
+        amendedFrom={decision.amendedFrom}
+        className="break-words"
+      />
       <span className="text-xs text-muted-foreground">
         {decision.channel === "chat_approval"
           ? t("inbox.viaChat")
           : decision.decidedBy === "human"
             ? decision.actor
             : null}
-        {previous === null
-          ? null
-          : ` ${t("inbox.amendedFrom", { amount: formatMoney(previous) })}`}
         {decision.note && decision.decidedBy !== "policy"
           ? ` “${decision.note}”`
           : null}

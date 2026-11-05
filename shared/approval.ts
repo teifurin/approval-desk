@@ -118,6 +118,49 @@ export const decisionViewSchema = z.object({
 });
 export type DecisionView = z.infer<typeof decisionViewSchema>;
 
+const amendedSideSchema = z.object({
+  amount: z.number().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+});
+const amendmentSchema = amendedSideSchema.extend({
+  to: amendedSideSchema.optional(),
+});
+
+function payloadText(value: unknown): string {
+  if (value === undefined) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/**
+ * What a decision changed, from what it recorded at the time. `amount.to` is
+ * missing from records made before both sides were kept.
+ */
+export function describeAmendment(amendedFrom: DecisionView["amendedFrom"]): {
+  amount: { from: number | null; to?: number | null } | null;
+  fields: Array<{ field: string; from: string; to: string }>;
+} | null {
+  const parsed = amendmentSchema.safeParse(amendedFrom);
+  if (!amendedFrom || !parsed.success) return null;
+  const { amount = null, payload = {}, to } = parsed.data;
+  const nextPayload = to?.payload ?? payload;
+  const amountChanged = to ? (to.amount ?? null) !== amount : amount !== null;
+  return {
+    amount: amountChanged
+      ? { from: amount, ...(to ? { to: to.amount ?? null } : {}) }
+      : null,
+    fields: Object.keys({ ...payload, ...nextPayload })
+      .filter(
+        (field) =>
+          JSON.stringify(payload[field]) !== JSON.stringify(nextPayload[field]),
+      )
+      .map((field) => ({
+        field,
+        from: payloadText(payload[field]),
+        to: payloadText(nextPayload[field]),
+      })),
+  };
+}
+
 export const policyViewSchema = z.object({
   id: z.string(),
   kind: z.enum(POLICY_KINDS),

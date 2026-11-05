@@ -24,7 +24,11 @@ import listPolicies from "../../actions/list-policies.js";
 import listRequests from "../../actions/list-requests.js";
 import requestApproval from "../../actions/request-approval.js";
 import setPolicy from "../../actions/set-policy.js";
-import { MAX_PAYLOAD_CHARS, revealHiddenCharacters } from "../../shared/approval.js";
+import {
+  describeAmendment,
+  MAX_PAYLOAD_CHARS,
+  revealHiddenCharacters,
+} from "../../shared/approval.js";
 import { getDb, schema } from "../db/index.js";
 import migrate from "../plugins/db.js";
 import { CHAT_ACTION_NAMES, resolveChatActionSurface } from "./agent-surface.js";
@@ -696,6 +700,171 @@ describe("blocking", () => {
     );
     const result = await file({ payload: { forbidden: true } });
     expect(result.status).toBe("rejected");
+  });
+});
+
+describe("approving reads the final version", () => {
+  const SAFE = { command: "git push origin main", cwd: "/repo" };
+  const FORCED = { command: "git push --force origin main", cwd: "/repo" };
+
+  const filePush = () =>
+    file({
+      actionType: "shell_command",
+      title: `Run: ${SAFE.command}`,
+      payload: SAFE,
+    });
+
+  async function expectUntouched(id: string) {
+    const { request, decisions } = await getRequest.run({ id }, inbox);
+    expect(request.status).toBe("pending");
+    expect(request.payload).toEqual(SAFE);
+    expect(decisions).toEqual([]);
+  }
+
+  it("refuses a command changed into one a rule blocks", async () => {
+    const { id } = await filePush();
+    await expect(
+      decide.run({ id, verdict: "approve", payload: FORCED }, inbox),
+    ).rejects.toThrow(/blocks/);
+    await expectUntouched(id);
+  });
+
+  it("refuses the same change from a chat card a person clicked", async () => {
+    const { id } = await filePush();
+    const args = { id, verdict: "approve" as const, payload: FORCED };
+    await decideGate(args, chatAgent);
+    await expect(decide.run(args, chatApproved)).rejects.toThrow(/blocks/);
+    await expectUntouched(id);
+  });
+
+  it("refuses a request that a newer rule blocks, even unchanged", async () => {
+    const { id } = await filePush();
+    await setPolicy.run(
+      { op: "add", kind: "block_pattern", contains: ["origin main"] },
+      inbox,
+    );
+    await expect(decide.run({ id, verdict: "approve" }, inbox)).rejects.toThrow(
+      /blocks/,
+    );
+    await expectUntouched(id);
+  });
+
+  it("can still reject what a rule blocks", async () => {
+    const { id } = await filePush();
+    await setPolicy.run(
+      { op: "add", kind: "block_pattern", contains: ["origin main"] },
+      inbox,
+    );
+    const { request } = await decide.run({ id, verdict: "reject" }, inbox);
+    expect(request.status).toBe("rejected");
+  });
+
+  it("allows the change once a person turns the rule off", async () => {
+    const { id } = await filePush();
+    const { policies } = await listPolicies.run({}, inbox);
+    const rule = policies.find((policy) =>
+      JSON.stringify(policy.params).includes("--force"),
+    );
+    await setPolicy.run(
+      { op: "set_enabled", policyId: rule!.id, enabled: false },
+      inbox,
+    );
+    const { request } = await decide.run(
+      { id, verdict: "approve", payload: FORCED },
+      inbox,
+    );
+    expect(request.status).toBe("approved");
+    expect(request.payload).toEqual(FORCED);
+  });
+
+  it("works out the risk again when the amount changes", async () => {
+    const { id } = await file({ amount: 12 });
+    const { request } = await decide.run(
+      { id, verdict: "approve", amount: 10_000 },
+      inbox,
+    );
+    expect(request.amount).toBe(10_000);
+    expect(request.risk).toBe("high");
+  });
+
+  it("works out which rules apply again when the amount changes", async () => {
+    await allowPurchasesUnder(20);
+    const { id } = await file({ amount: 12 });
+    await decide.run({ id, verdict: "hold" }, inbox);
+    const { request } = await decide.run(
+      { id, verdict: "approve", amount: 500 },
+      inbox,
+    );
+    expect(request.ruleHits).toMatchObject([
+      { kind: "default", effect: "review" },
+    ]);
+  });
+
+  it("keeps why a request came to a person when nothing changes", async () => {
+    const { id } = await file({ amount: 12 });
+    await allowPurchasesUnder(20);
+    const { request } = await decide.run({ id, verdict: "approve" }, inbox);
+    expect(request.ruleHits).toMatchObject([
+      { kind: "default", effect: "review" },
+    ]);
+  });
+
+  it("still approves an ordinary change", async () => {
+    const { id } = await file({ amount: 180 });
+    const { request } = await decide.run(
+      { id, verdict: "approve", amount: 120 },
+      inbox,
+    );
+    expect(request.status).toBe("approved");
+    expect(request.amount).toBe(120);
+  });
+});
+
+describe("what a decision changed", () => {
+  async function amendmentAfter(
+    args: Partial<Parameters<typeof decide.run>[0]>,
+  ) {
+    const { id } = await file({
+      amount: 180,
+      payload: { item: "desk", vendor: "Acme" },
+    });
+    await decide.run({ id, verdict: "approve", ...args }, inbox);
+    const { decisions } = await getRequest.run({ id }, inbox);
+    return describeAmendment(decisions[0]!.amendedFrom);
+  }
+
+  it("records both sides of a changed amount", async () => {
+    expect(await amendmentAfter({ amount: 120 })).toEqual({
+      amount: { from: 180, to: 120 },
+      fields: [],
+    });
+  });
+
+  it("lists only the payload fields that changed", async () => {
+    expect(
+      await amendmentAfter({ payload: { item: "small desk", vendor: "Acme" } }),
+    ).toEqual({
+      amount: null,
+      fields: [{ field: "item", from: "desk", to: "small desk" }],
+    });
+  });
+
+  it("shows a value that isn't text", async () => {
+    expect(await amendmentAfter({ payload: { seats: 3 } })).toEqual({
+      amount: null,
+      fields: [{ field: "seats", from: "", to: "3" }],
+    });
+  });
+
+  it("has nothing to say about a plain approval", async () => {
+    expect(await amendmentAfter({})).toBeNull();
+  });
+
+  it("still reads a change recorded with only its old amount", () => {
+    expect(describeAmendment({ amount: 180 })).toEqual({
+      amount: { from: 180 },
+      fields: [],
+    });
   });
 });
 

@@ -5,7 +5,10 @@ import { z } from "zod";
 import { getDb, schema } from "../server/db/index.js";
 import {
   approvalExpiry,
+  autoApprovedCents24h,
   decisionOrigin,
+  loadRules,
+  lockOwnerRules,
   matchesAgentProposal,
   mustProveUi,
   recordAgentProposal,
@@ -14,7 +17,9 @@ import {
   toAgentProposal,
   toRequestView,
 } from "../server/lib/approvals.js";
+import { evaluateRequest } from "../server/lib/policy.js";
 import {
+  centsToUsd,
   payloadSchema,
   requestViewSchema,
   usdAmountSchema,
@@ -27,11 +32,12 @@ const errors = defineActionErrors(
   "not_decidable",
   "invalid_amendment",
   "proposal_stale",
+  "blocked_by_rule",
 );
 
 export default defineAction({
   description:
-    "Decide an approval request: approve (optionally changing amount or payload first), reject, or hold (send an auto-approved request back to a person). Approving pauses for the person to click Approve on the exact arguments, so state the amended values and never claim it is approved until this returns. Rejecting and holding take effect immediately.",
+    "Decide an approval request: approve (optionally changing amount or payload first), reject, or hold (send an auto-approved request back to a person). Approving pauses for the person to click Approve on the exact arguments, so state the amended values and never claim it is approved until this returns. The rules read the final values, and an approval is refused if a rule blocks them. Rejecting and holding take effect immediately.",
   // Tightening is free for the chat agent. Approving is not, on any surface, and
   // every other caller has to prove it is the signed-in UI. "Always allow" would
   // let the agent approve by itself, so it can't be turned on for this action.
@@ -91,6 +97,8 @@ export default defineAction({
     const { decidedBy, channel } = decisionOrigin(ctx);
 
     return getDb().transaction(async (tx) => {
+      // Rule changes wait for this, so the rules read below still hold at the commit.
+      if (verdict === "approve") await lockOwnerRules(tx, ownerEmail);
       const [row] = await tx
         .select()
         .from(requests)
@@ -153,12 +161,46 @@ export default defineAction({
             ? ("rejected" as const)
             : ("pending" as const);
 
+      // What's approved may not be what was filed, and the rules may have changed
+      // while it waited. A block beats a person's approval: to do the blocked thing
+      // anyway, a person turns the rule off first, which is on the record too.
+      let { risk, ruleHits } = row;
+      if (verdict === "approve") {
+        const evaluation = evaluateRequest(
+          {
+            actionType: row.actionType,
+            amountCents,
+            title: row.title,
+            payload: JSON.parse(nextPayload),
+          },
+          await loadRules(tx, ownerEmail),
+          {
+            now: nowDate,
+            autoApprovedCents24h: await autoApprovedCents24h(tx, ownerEmail, nowDate),
+          },
+        );
+        if (evaluation.outcome === "rejected") {
+          const reasons = evaluation.hits.map((hit) => hit.message).join("; ");
+          return errors.noWrite(
+            `A rule blocks this, so it can't be approved: ${reasons}.`,
+            "blocked_by_rule",
+            { statusCode: 409 },
+          );
+        }
+        if (amended) {
+          risk = evaluation.risk;
+          ruleHits = JSON.stringify(evaluation.hits);
+        }
+      }
+
       const [updated] = await tx
         .update(requests)
         .set({
           status,
           amountCents,
           payload: nextPayload,
+          risk,
+          ruleHits,
           decidedBy: verdict === "hold" ? null : decidedBy,
           decidedAt: verdict === "hold" ? null : now,
           approvalExpiresAt: verdict === "approve" ? approvalExpiry(nowDate) : null,
@@ -176,10 +218,15 @@ export default defineAction({
         actor: decidedBy === "human" ? ownerEmail : "Chat agent",
         verdict,
         note: note ?? null,
+        // Both sides, because a request that's held and approved again can change twice.
         amendedFrom: amended
           ? JSON.stringify({
-              amount: row.amountCents === null ? null : row.amountCents / 100,
+              amount: centsToUsd(row.amountCents),
               payload: payload ? JSON.parse(row.payload) : undefined,
+              to: {
+                amount: centsToUsd(amountCents),
+                payload: payload ? JSON.parse(nextPayload) : undefined,
+              },
             })
           : null,
         createdAt: now,

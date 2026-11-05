@@ -2,6 +2,7 @@ import { useActionQuery } from "@agent-native/core/client/hooks";
 import { useT } from "@agent-native/core/client/i18n";
 import { Link } from "react-router";
 
+import { AmendmentLines } from "@/components/amendment-lines";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RISK_BAR, timeAgo } from "@/lib/approval-format";
 import { cn } from "@/lib/utils";
@@ -61,6 +62,10 @@ export default function AuditRoute() {
                 {timeAgo(decision.createdAt)}
               </span>
             </span>
+            <AmendmentLines
+              amendedFrom={decision.amendedFrom}
+              className="min-w-0 truncate"
+            />
             <span className="text-xs text-muted-foreground">
               {decision.requestAgent} · {t(`inbox.type.${decision.requestActionType}`)}
               {decision.channel === "chat_approval"
