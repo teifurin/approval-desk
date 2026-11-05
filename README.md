@@ -4,7 +4,10 @@ One approval inbox, shared by people and agents. Built on
 [Agent-Native](https://github.com/BuilderIO/agent-native) for the Builder.io
 Agent-Native Hackathon.
 
-<!-- Demo video: add the public Clips link here. -->
+**Demo video:** [recorded with Clips](https://clips.agent-native.com/r/GZoaIKfHT0IG)
+(4:46, one take in real time, so the pauses are the model working). Clicks are
+scripted and the narration is text-to-speech. The app, the model, and Claude Code
+are real, and the purchases are simulated.
 
 AI agents can now spend money, send email, and push code. Approval Desk is the
 checkpoint in front of those actions:
